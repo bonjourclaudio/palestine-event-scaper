@@ -19,7 +19,7 @@ var (
 	reAbsTime     = regexp.MustCompile(`\(\d{2}:\d{2}\s*GMT\)`) // "(HH:MM GMT)"
 	europeZurich  *time.Location
 	globalTarget  string
-	httpAddr      = ":8000"
+	httpAddr      = ":8080"
 	startupParsed []Entry
 )
 
@@ -28,10 +28,10 @@ type Config struct {
 }
 
 type Entry struct {
-	TimeGMT   string `json:"time_gmt"`   // "(HH:MM GMT)" as on page
-	TimeLocal string `json:"time_local"` // Europe/Zurich (e.g. "2025-11-03 10:30 CET")
+	TimeGMT   string `json:"time_gmt"`
+	TimeLocal string `json:"time_local"`
 	Title     string `json:"title"`
-	Text      string `json:"text"` // concatenated paragraphs
+	Text      string `json:"text"`
 }
 
 type partial struct {
@@ -56,23 +56,21 @@ func main() {
 		log.Fatal("config.json missing 'targetURL'")
 	}
 
-	// Parse once on startup and print JSON to stdout (CLI-friendly)
 	entries, err := parseLive(globalTarget)
 	if err != nil {
 		log.Fatalf("parse error: %v", err)
 	}
 	startupParsed = entries
 
-	// print to stdout as JSON
 	if err := json.NewEncoder(os.Stdout).Encode(entries); err != nil {
 		log.Printf("stdout JSON encode error: %v", err)
 	}
 
-	// HTTP endpoint for JSON
-	http.HandleFunc("/getRecentEvents", handleLiveJSON)
-	log.Printf("Serving JSON on %s GET /getRecentEvents (source: %s)", httpAddr, globalTarget)
-	log.Fatal(http.ListenAndServe(httpAddr, nil))
+	// HTTP endpoint for JSON (with CORS)
+	http.Handle("/live", withCORS(http.HandlerFunc(handleLiveJSON)))
 
+	log.Printf("Serving JSON on %s GET /live (source: %s)", httpAddr, globalTarget)
+	log.Fatal(http.ListenAndServe(httpAddr, nil))
 }
 
 func readConfig(path string) (*Config, error) {
@@ -88,7 +86,12 @@ func readConfig(path string) (*Config, error) {
 }
 
 func handleLiveJSON(w http.ResponseWriter, r *http.Request) {
-	// fetch fresh each request; if it fails, fall back to startup snapshot
+	if r.Method == http.MethodOptions {
+		// Preflight CORS check
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	entries, err := parseLive(globalTarget)
 	if err != nil {
 		log.Printf("refresh failed, serving startup snapshot: %v", err)
@@ -103,6 +106,21 @@ func handleLiveJSON(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- CORS middleware ---
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// --- parsing logic ---
 func parseLive(url string) ([]Entry, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; StableNewsScraper/1.0)")
@@ -122,10 +140,11 @@ func parseLive(url string) ([]Entry, error) {
 	}
 
 	entries := make([]Entry, 0, 64)
+
+	// ✅ Restrict to the live feed container
 	selection := doc.Find(".l-col.l-col--8.live-blog--feed").First()
 	if selection.Length() == 0 {
-		// graceful fallback if class changes
-		selection = doc.Find("main, article, body").First()
+		selection = doc.Find("main, article, body").First() // fallback
 	}
 
 	var cur *partial
@@ -136,7 +155,6 @@ func parseLive(url string) ([]Entry, error) {
 			return
 		}
 
-		// new entry marker?
 		if reAbsTime.MatchString(txt) {
 			if cur != nil && cur.title != "" {
 				entries = append(entries, finalize(*cur))
@@ -146,7 +164,7 @@ func parseLive(url string) ([]Entry, error) {
 		}
 
 		if cur == nil {
-			return // ignore content before first time marker
+			return
 		}
 
 		if tag == "h2" && cur.title == "" {
@@ -154,7 +172,6 @@ func parseLive(url string) ([]Entry, error) {
 			return
 		}
 		if tag == "h2" && cur.title != "" {
-			// rare case: title appears again without time -> flush current
 			entries = append(entries, finalize(*cur))
 			cur = &partial{title: txt}
 			return
@@ -169,7 +186,14 @@ func parseLive(url string) ([]Entry, error) {
 		entries = append(entries, finalize(*cur))
 	}
 
-	return entries, nil
+	// Only keep well-formed entries
+	filtered := entries[:0]
+	for _, e := range entries {
+		if e.TimeGMT != "" && e.Title != "" {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered, nil
 }
 
 func finalize(p partial) Entry {
