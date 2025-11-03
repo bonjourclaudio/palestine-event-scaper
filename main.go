@@ -19,7 +19,7 @@ var (
 	reAbsTime     = regexp.MustCompile(`\(\d{2}:\d{2}\s*GMT\)`) // "(HH:MM GMT)"
 	europeZurich  *time.Location
 	globalTarget  string
-	httpAddr      = ":8080"
+	httpAddr      = ":8000"
 	startupParsed []Entry
 )
 
@@ -69,9 +69,10 @@ func main() {
 	}
 
 	// HTTP endpoint for JSON
-	http.HandleFunc("/live", handleLiveJSON)
-	log.Printf("Serving JSON on %s GET /live (source: %s)", httpAddr, globalTarget)
+	http.HandleFunc("/getRecentEvents", handleLiveJSON)
+	log.Printf("Serving JSON on %s GET /getRecentEvents (source: %s)", httpAddr, globalTarget)
 	log.Fatal(http.ListenAndServe(httpAddr, nil))
+
 }
 
 func readConfig(path string) (*Config, error) {
