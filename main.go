@@ -183,11 +183,13 @@ func parseLive(url string) ([]Entry, error) {
 	})
 
 	if cur != nil && cur.title != "" {
-		// only keep 5 entries
+
 		entries = append(entries, finalize(*cur))
-		if len(entries) > 5 {
-			entries = entries[len(entries)-5:]
+
+		if len(entries) > 1 {
+			entries = entries[len(entries)-1:]
 		}
+
 	}
 
 	// Only keep well-formed entries
