@@ -184,11 +184,9 @@ func parseLive(url string) ([]Entry, error) {
 
 	if cur != nil && cur.title != "" {
 
+		// only keep first entry in entries to avoid overwhelming amount of data
+		entries = entries[:1]
 		entries = append(entries, finalize(*cur))
-
-		if len(entries) > 1 {
-			entries = entries[len(entries)-1:]
-		}
 
 	}
 
